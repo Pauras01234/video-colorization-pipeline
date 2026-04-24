@@ -1,0 +1,10 @@
+.venv/
+frontend/node_modules/
+models/
+outputs/
+uploads/
+result_images/
+notebooks/
+__pycache__/
+*.pyc
+.env
