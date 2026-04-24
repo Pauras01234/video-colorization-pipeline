@@ -1,7 +1,15 @@
 from pathlib import Path
 import torch
+import collections
+import collections.abc
 
-# --- PATCH torch.load (must come BEFORE DeOldify import) ---
+# Python 3.11 compatibility patch for old fastai
+collections.Sized = collections.abc.Sized
+collections.Iterable = collections.abc.Iterable
+collections.Container = collections.abc.Container
+collections.Callable = collections.abc.Callable
+
+# PyTorch 2.6+ compatibility patch
 _original_torch_load = torch.load
 
 def patched_torch_load(*args, **kwargs):
@@ -9,11 +17,9 @@ def patched_torch_load(*args, **kwargs):
     return _original_torch_load(*args, **kwargs)
 
 torch.load = patched_torch_load
-# ----------------------------------------------------------
 
 from deoldify.visualize import get_image_colorizer
 
-# GLOBAL MODEL (load once)
 _colorizer = None
 
 
@@ -38,6 +44,6 @@ def colorize_frames(input_dir: str, output_dir: str):
         colorizer.plot_transformed_image(
             path=str(frame),
             render_factor=35,
-            results_dir=output_path,   # must be Path, not string
+            results_dir=output_path,
             display_render_factor=False
         )
