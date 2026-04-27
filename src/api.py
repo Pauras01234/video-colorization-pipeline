@@ -1,37 +1,53 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 import shutil
 from pathlib import Path
+import uuid
+import os
 
 import redis
 from rq import Queue
 from rq.job import Job
+from dotenv import load_dotenv
 
 from src.jobs import process_video_job
+from src.storage import upload_file, create_presigned_url
+
+load_dotenv()
 
 app = FastAPI()
 
 UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-
 UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-redis_conn = redis.Redis(host="localhost", port=6379)
+redis_conn = redis.Redis(
+    host=os.getenv("REDIS_HOST"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    password=os.getenv("REDIS_PASSWORD"),
+    ssl=True,
+)
+
 queue = Queue("default", connection=redis_conn)
 
 
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
-    temp_id = file.filename.replace(" ", "_")
+    job_id = str(uuid.uuid4())
+    safe_filename = file.filename.replace(" ", "_")
 
-    input_path = UPLOAD_DIR / temp_id
-    output_path = OUTPUT_DIR / f"{Path(temp_id).stem}_output.mp4"
+    local_temp_path = UPLOAD_DIR / f"{job_id}_{safe_filename}"
+    input_key = f"uploads/{job_id}_{safe_filename}"
 
-    with open(input_path, "wb") as buffer:
+    with open(local_temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    job = queue.enqueue(process_video_job, str(input_path), str(output_path))
+    upload_file(str(local_temp_path), input_key)
+
+    job = queue.enqueue(
+    process_video_job,
+    input_key,
+    job_timeout=7200
+)
 
     return {"job_id": job.id}
 
@@ -49,15 +65,14 @@ def get_status(job_id: str):
 def download_video(job_id: str):
     try:
         job = Job.fetch(job_id, connection=redis_conn)
+
         if job.get_status() != "finished":
-            return {"error": "file not ready"}
+            return JSONResponse({"error": "file not ready"}, status_code=400)
 
-        output_path = job.args[1]
-        file_path = Path(output_path)
+        output_key = job.result
+        url = create_presigned_url(output_key)
 
-        if file_path.exists():
-            return FileResponse(file_path, media_type="video/mp4")
+        return {"download_url": url}
 
-        return {"error": "file missing"}
-    except Exception:
-        return {"error": "job not found"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
